@@ -1,7 +1,44 @@
+# Environment
 .env
+
+# Local files
+app.py
+requirements.txt
+
+# Database
 *.db
+*.sqlite
+*.sqlite3
+
+# Sessions
 sessions/
+*.session
+
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
 .DS_Store
-node_modules/
+Thumbs.db
+
+# Logs
+*.log
+
+# Local config
+local_*
