@@ -55,4 +55,126 @@
         </div>
     </div>
     
-    <script
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+        tg.ready();
+        
+        const inputs = document.querySelectorAll('.code-input');
+        
+        // Inputlarni boshqarish
+        inputs.forEach((input, index) => {
+            input.addEventListener('input', (e) => {
+                const value = e.target.value;
+                
+                // Faqat raqam kiritish
+                if (!/^\d*$/.test(value)) {
+                    e.target.value = '';
+                    return;
+                }
+                
+                if (value.length === 1 && index < inputs.length - 1) {
+                    inputs[index + 1].focus();
+                }
+                
+                updateCodeValue();
+            });
+            
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Backspace' && !input.value && index > 0) {
+                    inputs[index - 1].focus();
+                }
+                
+                // Paste hodisasi
+                if (e.key === 'v' && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    navigator.clipboard.readText().then(text => {
+                        const code = text.replace(/\D/g, '').slice(0, 5);
+                        for (let i = 0; i < inputs.length; i++) {
+                            inputs[i].value = code[i] || '';
+                        }
+                        updateCodeValue();
+                        if (code.length === 5) {
+                            inputs[4].focus();
+                        }
+                    });
+                }
+            });
+        });
+        
+        function updateCodeValue() {
+            const code = Array.from(inputs).map(input => input.value).join('');
+            document.getElementById('codeValue').value = code;
+        }
+        
+        // Formani yuborish
+        document.getElementById('verifyForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const code = document.getElementById('codeValue').value;
+            const submitBtn = document.getElementById('submitBtn');
+            const errorMessage = document.getElementById('errorMessage');
+            
+            if (code.length !== 5) {
+                errorMessage.textContent = 'Iltimos, 5 xonali kodni to\'liq kiriting';
+                errorMessage.style.display = 'block';
+                return;
+            }
+            
+            submitBtn.disabled = true;
+            document.querySelector('.btn-text').style.display = 'none';
+            document.querySelector('.spinner').style.display = 'block';
+            errorMessage.style.display = 'none';
+            
+            try {
+                const response = await fetch('/verify', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `code=${code}`
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    window.location.href = '/dashboard';
+                } else {
+                    throw new Error(data.error || 'Xatolik yuz berdi');
+                }
+            } catch (error) {
+                errorMessage.textContent = error.message;
+                errorMessage.style.display = 'block';
+                
+                submitBtn.disabled = false;
+                document.querySelector('.btn-text').style.display = 'block';
+                document.querySelector('.spinner').style.display = 'none';
+            }
+        });
+        
+        // Timer
+        let timeLeft = 60;
+        const timerElement = document.getElementById('timer');
+        const resendBtn = document.getElementById('resendBtn');
+        resendBtn.disabled = true;
+        
+        const countdown = setInterval(() => {
+            timeLeft--;
+            timerElement.textContent = timeLeft;
+            
+            if (timeLeft <= 0) {
+                clearInterval(countdown);
+                resendBtn.disabled = false;
+                resendBtn.textContent = 'Qayta yuborish';
+            }
+        }, 1000);
+        
+        function resendCode() {
+            window.location.href = '/login';
+        }
+        
+        // Birinchi inputga fokus
+        inputs[0].focus();
+    </script>
+</body>
+</html>
