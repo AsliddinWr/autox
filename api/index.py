@@ -6,7 +6,7 @@ from datetime import datetime
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 from telethon import TelegramClient
 from telethon.sessions import StringSession
-from telethon.errors import PhoneCodeInvalidError, SessionPasswordNeededError
+from telethon.errors import PhoneCodeInvalidError, PhoneNumberInvalidError, SessionPasswordNeededError
 from telethon.tl.types import Channel
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,21 +21,33 @@ app = Flask(
     static_url_path="/static"
 )
 
-app.secret_key = os.getenv("SECRET_KEY", "change-this-secret-key")
+app.secret_key = os.getenv("SECRET_KEY", "dev-secret-change-me")
 
-API_ID_RAW = os.getenv("API_ID")
-API_HASH = os.getenv("API_HASH")
-DATABASE_URL = os.getenv("DATABASE_URL")
+db = Database(os.getenv("DATABASE_URL"))
 
-if not API_ID_RAW:
-    raise RuntimeError("API_ID environment variable topilmadi")
 
-if not API_HASH:
-    raise RuntimeError("API_HASH environment variable topilmadi")
+def get_payload():
+    if request.is_json:
+        return request.get_json(silent=True) or {}
+    return request.form.to_dict()
 
-API_ID = int(API_ID_RAW)
 
-db = Database(DATABASE_URL)
+def get_api_config():
+    api_id_raw = os.getenv("API_ID")
+    api_hash = os.getenv("API_HASH")
+
+    if not api_id_raw:
+        raise RuntimeError("API_ID Vercel Environment Variables ichida yo'q")
+
+    if not api_hash:
+        raise RuntimeError("API_HASH Vercel Environment Variables ichida yo'q")
+
+    try:
+        api_id = int(api_id_raw)
+    except ValueError:
+        raise RuntimeError("API_ID faqat raqam bo'lishi kerak")
+
+    return api_id, api_hash
 
 
 def run_async(coro):
@@ -48,17 +60,21 @@ def run_async(coro):
 
 
 async def create_client(session_string=None):
+    api_id, api_hash = get_api_config()
+
     client = TelegramClient(
         StringSession(session_string) if session_string else StringSession(),
-        API_ID,
-        API_HASH
+        api_id,
+        api_hash
     )
+
     await client.connect()
     return client
 
 
 async def get_authorized_client(user_id):
     session_data = db.get_session(user_id)
+
     if not session_data:
         return None
 
@@ -81,67 +97,102 @@ def index():
     return render_template("login.html")
 
 
+@app.route("/health")
+def health():
+    return jsonify({
+        "status": "ok",
+        "time": datetime.utcnow().isoformat(),
+        "database": "postgres" if db.use_postgres else "sqlite",
+        "api_id_set": bool(os.getenv("API_ID")),
+        "api_hash_set": bool(os.getenv("API_HASH")),
+        "bot_token_set": bool(os.getenv("BOT_TOKEN"))
+    })
+
+
 @app.route("/login", methods=["POST"])
 def login():
-    phone = request.form.get("phone", "").strip()
+    data = get_payload()
+    phone = (data.get("phone") or "").strip().replace(" ", "")
 
     if not phone:
-        return jsonify({"error": "Telefon raqam kiritilishi shart"}), 400
+        return jsonify({"success": False, "error": "Telefon raqam kiritilishi shart"}), 400
+
+    if not phone.startswith("+"):
+        return jsonify({"success": False, "error": "Raqam + bilan boshlanishi kerak. Masalan: +998901234567"}), 400
 
     async def _login():
         client = await create_client()
 
         try:
             result = await client.send_code_request(phone)
-            session_string = client.session.save()
 
             db.save_temp_login(
                 phone=phone,
-                session_string=session_string,
+                session_string=client.session.save(),
                 phone_code_hash=result.phone_code_hash
             )
 
             session["phone"] = phone
+            session.modified = True
 
-            return jsonify({"success": True, "message": "Kod Telegram ilovangizga yuborildi"})
+            return jsonify({
+                "success": True,
+                "message": "Kod Telegram ilovangizga yuborildi"
+            })
         finally:
             await client.disconnect()
 
     try:
         return run_async(_login())
+
+    except PhoneNumberInvalidError:
+        return jsonify({"success": False, "error": "Telefon raqam noto'g'ri"}), 400
+
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"success": False, "error": str(e)}), 400
 
 
 @app.route("/verify", methods=["POST"])
 def verify():
-    code = request.form.get("code", "").strip()
+    data = get_payload()
+    code = (data.get("code") or "").strip()
     phone = session.get("phone")
 
     if not phone or not code:
-        return jsonify({"error": "Ma'lumotlar yetarli emas"}), 400
+        return jsonify({"success": False, "error": "Kod yoki telefon raqam topilmadi"}), 400
 
     temp_data = db.get_temp_login(phone)
 
     if not temp_data:
-        return jsonify({"error": "Vaqtinchalik login sessiya topilmadi. Qaytadan kod oling."}), 400
+        return jsonify({"success": False, "error": "Login sessiya topilmadi. Kodni qaytadan oling."}), 400
 
     async def _verify():
         client = await create_client(temp_data["session_string"])
 
         try:
-            await client.sign_in(
-                phone=phone,
-                code=code,
-                phone_code_hash=temp_data["phone_code_hash"]
-            )
+            try:
+                await client.sign_in(
+                    phone=phone,
+                    code=code,
+                    phone_code_hash=temp_data["phone_code_hash"]
+                )
+            except SessionPasswordNeededError:
+                db.save_temp_login(
+                    phone=phone,
+                    session_string=client.session.save(),
+                    phone_code_hash=temp_data["phone_code_hash"]
+                )
+                return jsonify({
+                    "success": False,
+                    "password_required": True,
+                    "message": "2 bosqichli parol kerak"
+                })
 
-            session_string = client.session.save()
-
-            db.save_session(phone, session_string)
+            db.save_session(phone, client.session.save())
             db.delete_temp_login(phone)
 
             session["user_id"] = phone
+            session.modified = True
 
             return jsonify({"success": True})
         finally:
@@ -151,15 +202,46 @@ def verify():
         return run_async(_verify())
 
     except PhoneCodeInvalidError:
-        return jsonify({"error": "Kod noto'g'ri kiritildi"}), 400
-
-    except SessionPasswordNeededError:
-        return jsonify({
-            "error": "Bu akkauntda 2 bosqichli parol yoqilgan. Hozircha bu funksiya qo'llab-quvvatlanmaydi."
-        }), 400
+        return jsonify({"success": False, "error": "Kod noto'g'ri kiritildi"}), 400
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route("/verify-password", methods=["POST"])
+def verify_password():
+    data = get_payload()
+    password = data.get("password") or ""
+    phone = session.get("phone")
+
+    if not phone or not password:
+        return jsonify({"success": False, "error": "Parol kiritilishi shart"}), 400
+
+    temp_data = db.get_temp_login(phone)
+
+    if not temp_data:
+        return jsonify({"success": False, "error": "Login sessiya topilmadi. Qaytadan kod oling."}), 400
+
+    async def _verify_password():
+        client = await create_client(temp_data["session_string"])
+
+        try:
+            await client.sign_in(password=password)
+
+            db.save_session(phone, client.session.save())
+            db.delete_temp_login(phone)
+
+            session["user_id"] = phone
+            session.modified = True
+
+            return jsonify({"success": True})
+        finally:
+            await client.disconnect()
+
+    try:
+        return run_async(_verify_password())
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400
 
 
 @app.route("/api/groups")
@@ -167,16 +249,16 @@ def get_groups():
     user_id = session.get("user_id")
 
     if not user_id:
-        return jsonify({"error": "Avtorizatsiya qilinmagan"}), 401
+        return jsonify({"success": False, "error": "Avtorizatsiya qilinmagan"}), 401
 
     async def _get_groups():
         client = await get_authorized_client(user_id)
 
         if not client:
-            return jsonify({"error": "Sessiya topilmadi yoki avtorizatsiya tugagan"}), 401
+            return jsonify({"success": False, "error": "Telegram sessiya topilmadi. Qaytadan kiring."}), 401
 
         try:
-            dialogs = await client.get_dialogs()
+            dialogs = await client.get_dialogs(limit=200)
             groups = []
 
             for dialog in dialogs:
@@ -185,18 +267,18 @@ def get_groups():
 
                     groups.append({
                         "id": str(dialog.id),
-                        "title": dialog.name,
+                        "title": dialog.name or "Nomsiz guruh",
                         "type": "channel" if isinstance(entity, Channel) else "group"
                     })
 
-            return jsonify({"groups": groups})
+            return jsonify({"success": True, "groups": groups})
         finally:
             await client.disconnect()
 
     try:
         return run_async(_get_groups())
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"success": False, "error": str(e)}), 400
 
 
 @app.route("/api/schedule", methods=["POST"])
@@ -204,28 +286,41 @@ def schedule_message():
     user_id = session.get("user_id")
 
     if not user_id:
-        return jsonify({"error": "Avtorizatsiya qilinmagan"}), 401
+        return jsonify({"success": False, "error": "Avtorizatsiya qilinmagan"}), 401
 
-    data = request.get_json(silent=True) or {}
+    data = get_payload()
 
-    group_id = data.get("group_id")
-    message = data.get("message")
-    interval = int(data.get("interval", 60))
-    interval_type = data.get("interval_type", "minutes")
+    group_id = str(data.get("group_id") or "").strip()
+    group_title = str(data.get("group_title") or "").strip()
+    message = str(data.get("message") or "").strip()
+    interval = data.get("interval") or 1
+    interval_type = data.get("interval_type") or "minutes"
 
-    if not group_id or not message:
-        return jsonify({"error": "Guruh va xabar kiritilishi shart"}), 400
+    if not group_id:
+        return jsonify({"success": False, "error": "Guruh tanlanishi shart"}), 400
 
-    if interval_type == "seconds":
-        interval_seconds = interval
-    elif interval_type == "minutes":
-        interval_seconds = interval * 60
-    elif interval_type == "hours":
+    if not message:
+        return jsonify({"success": False, "error": "Xabar matni kiritilishi shart"}), 400
+
+    try:
+        interval = int(interval)
+    except ValueError:
+        interval = 1
+
+    interval = max(interval, 1)
+
+    if interval_type == "hours":
         interval_seconds = interval * 3600
     else:
         interval_seconds = interval * 60
 
-    task_id = db.save_task(user_id, group_id, message, interval_seconds)
+    task_id = db.save_task(
+        user_id=user_id,
+        group_id=group_id,
+        group_title=group_title,
+        message=message,
+        interval_seconds=interval_seconds
+    )
 
     return jsonify({
         "success": True,
@@ -239,10 +334,12 @@ def get_tasks():
     user_id = session.get("user_id")
 
     if not user_id:
-        return jsonify({"error": "Avtorizatsiya qilinmagan"}), 401
+        return jsonify({"success": False, "error": "Avtorizatsiya qilinmagan"}), 401
 
-    tasks = db.get_tasks(user_id)
-    return jsonify({"tasks": tasks})
+    return jsonify({
+        "success": True,
+        "tasks": db.get_tasks(user_id)
+    })
 
 
 @app.route("/api/tasks/<task_id>", methods=["DELETE"])
@@ -250,9 +347,10 @@ def delete_task(task_id):
     user_id = session.get("user_id")
 
     if not user_id:
-        return jsonify({"error": "Avtorizatsiya qilinmagan"}), 401
+        return jsonify({"success": False, "error": "Avtorizatsiya qilinmagan"}), 401
 
-    db.delete_task(task_id)
+    db.delete_task(task_id, user_id=user_id)
+
     return jsonify({"success": True})
 
 
@@ -267,6 +365,10 @@ def logout():
     return redirect(url_for("index"))
 
 
-@app.route("/health")
-def health():
-    return jsonify({"status": "ok", "time": datetime.utcnow().isoformat()})
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify({
+        "success": False,
+        "error": "Server xatosi",
+        "detail": str(error)
+    }), 500

@@ -1,23 +1,25 @@
 import os
 import sqlite3
-from datetime import datetime
 
 
 class Database:
     def __init__(self, database_url=None):
-        self.database_url = database_url
-        self.use_postgres = bool(database_url and database_url.startswith("postgres"))
+        self.database_url = database_url or os.getenv("DATABASE_URL")
+        self.use_postgres = bool(
+            self.database_url and self.database_url.startswith(("postgres://", "postgresql://"))
+        )
 
         if self.use_postgres:
             import psycopg2
-            self.conn = psycopg2.connect(database_url)
+            self.conn = psycopg2.connect(self.database_url)
         else:
-            db_path = os.getenv("SQLITE_PATH", "/tmp/database.db")
+            db_path = os.getenv("SQLITE_PATH", "/tmp/autox_database.db")
             self.conn = sqlite3.connect(db_path, check_same_thread=False)
 
         self.create_tables()
+        self.migrate_tables()
 
-    def placeholder(self):
+    def ph(self):
         return "%s" if self.use_postgres else "?"
 
     def create_tables(self):
@@ -28,7 +30,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS sessions (
                     user_id TEXT PRIMARY KEY,
                     session_string TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                 )
             """)
 
@@ -37,7 +39,7 @@ class Database:
                     phone TEXT PRIMARY KEY,
                     session_string TEXT NOT NULL,
                     phone_code_hash TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                 )
             """)
 
@@ -46,11 +48,14 @@ class Database:
                     id SERIAL PRIMARY KEY,
                     user_id TEXT NOT NULL,
                     group_id TEXT NOT NULL,
+                    group_title TEXT,
                     message TEXT NOT NULL,
                     interval_seconds INTEGER NOT NULL,
                     is_active BOOLEAN DEFAULT TRUE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    last_run TIMESTAMP
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                    last_run TIMESTAMP WITH TIME ZONE,
+                    next_run TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                    last_error TEXT
                 )
             """)
         else:
@@ -76,13 +81,36 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id TEXT NOT NULL,
                     group_id TEXT NOT NULL,
+                    group_title TEXT,
                     message TEXT NOT NULL,
                     interval_seconds INTEGER NOT NULL,
                     is_active INTEGER DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    last_run TIMESTAMP
+                    last_run TIMESTAMP,
+                    next_run TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_error TEXT
                 )
             """)
+
+        self.conn.commit()
+
+    def migrate_tables(self):
+        cursor = self.conn.cursor()
+
+        if self.use_postgres:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS group_title TEXT")
+            cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS next_run TIMESTAMP WITH TIME ZONE DEFAULT NOW()")
+            cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS last_error TEXT")
+        else:
+            cursor.execute("PRAGMA table_info(tasks)")
+            columns = {row[1] for row in cursor.fetchall()}
+
+            if "group_title" not in columns:
+                cursor.execute("ALTER TABLE tasks ADD COLUMN group_title TEXT")
+            if "next_run" not in columns:
+                cursor.execute("ALTER TABLE tasks ADD COLUMN next_run TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+            if "last_error" not in columns:
+                cursor.execute("ALTER TABLE tasks ADD COLUMN last_error TEXT")
 
         self.conn.commit()
 
@@ -106,9 +134,10 @@ class Database:
 
     def get_session(self, user_id):
         cursor = self.conn.cursor()
-        ph = self.placeholder()
-
-        cursor.execute(f"SELECT session_string FROM sessions WHERE user_id = {ph}", (user_id,))
+        cursor.execute(
+            f"SELECT session_string FROM sessions WHERE user_id = {self.ph()}",
+            (user_id,)
+        )
         row = cursor.fetchone()
 
         if not row:
@@ -118,9 +147,10 @@ class Database:
 
     def delete_session(self, user_id):
         cursor = self.conn.cursor()
-        ph = self.placeholder()
-
-        cursor.execute(f"DELETE FROM sessions WHERE user_id = {ph}", (user_id,))
+        cursor.execute(
+            f"DELETE FROM sessions WHERE user_id = {self.ph()}",
+            (user_id,)
+        )
         self.conn.commit()
 
     def save_temp_login(self, phone, session_string, phone_code_hash):
@@ -134,7 +164,7 @@ class Database:
                 DO UPDATE SET
                     session_string = EXCLUDED.session_string,
                     phone_code_hash = EXCLUDED.phone_code_hash,
-                    created_at = CURRENT_TIMESTAMP
+                    created_at = NOW()
             """, (phone, session_string, phone_code_hash))
         else:
             cursor.execute("""
@@ -146,13 +176,14 @@ class Database:
 
     def get_temp_login(self, phone):
         cursor = self.conn.cursor()
-        ph = self.placeholder()
-
         cursor.execute(
-            f"SELECT session_string, phone_code_hash FROM temp_logins WHERE phone = {ph}",
+            f"""
+            SELECT session_string, phone_code_hash
+            FROM temp_logins
+            WHERE phone = {self.ph()}
+            """,
             (phone,)
         )
-
         row = cursor.fetchone()
 
         if not row:
@@ -165,28 +196,31 @@ class Database:
 
     def delete_temp_login(self, phone):
         cursor = self.conn.cursor()
-        ph = self.placeholder()
-
-        cursor.execute(f"DELETE FROM temp_logins WHERE phone = {ph}", (phone,))
+        cursor.execute(
+            f"DELETE FROM temp_logins WHERE phone = {self.ph()}",
+            (phone,)
+        )
         self.conn.commit()
 
-    def save_task(self, user_id, group_id, message, interval_seconds):
+    def save_task(self, user_id, group_id, group_title, message, interval_seconds):
         cursor = self.conn.cursor()
 
         if self.use_postgres:
             cursor.execute("""
-                INSERT INTO tasks (user_id, group_id, message, interval_seconds)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO tasks (
+                    user_id, group_id, group_title, message, interval_seconds, next_run
+                )
+                VALUES (%s, %s, %s, %s, %s, NOW() + (%s * INTERVAL '1 second'))
                 RETURNING id
-            """, (user_id, group_id, message, interval_seconds))
-
+            """, (user_id, group_id, group_title, message, interval_seconds, interval_seconds))
             task_id = cursor.fetchone()[0]
         else:
             cursor.execute("""
-                INSERT INTO tasks (user_id, group_id, message, interval_seconds)
-                VALUES (?, ?, ?, ?)
-            """, (user_id, group_id, message, interval_seconds))
-
+                INSERT INTO tasks (
+                    user_id, group_id, group_title, message, interval_seconds, next_run
+                )
+                VALUES (?, ?, ?, ?, ?, datetime('now', '+' || ? || ' seconds'))
+            """, (user_id, group_id, group_title, message, interval_seconds, interval_seconds))
             task_id = cursor.lastrowid
 
         self.conn.commit()
@@ -194,20 +228,21 @@ class Database:
 
     def get_tasks(self, user_id):
         cursor = self.conn.cursor()
-        ph = self.placeholder()
 
         if self.use_postgres:
-            cursor.execute(f"""
-                SELECT id, group_id, message, interval_seconds, is_active, created_at
+            cursor.execute("""
+                SELECT id, group_id, group_title, message, interval_seconds,
+                       is_active, created_at, last_run, next_run, last_error
                 FROM tasks
-                WHERE user_id = {ph} AND is_active = TRUE
+                WHERE user_id = %s AND is_active = TRUE
                 ORDER BY created_at DESC
             """, (user_id,))
         else:
-            cursor.execute(f"""
-                SELECT id, group_id, message, interval_seconds, is_active, created_at
+            cursor.execute("""
+                SELECT id, group_id, group_title, message, interval_seconds,
+                       is_active, created_at, last_run, next_run, last_error
                 FROM tasks
-                WHERE user_id = {ph} AND is_active = 1
+                WHERE user_id = ? AND is_active = 1
                 ORDER BY created_at DESC
             """, (user_id,))
 
@@ -217,53 +252,116 @@ class Database:
             tasks.append({
                 "task_id": str(row[0]),
                 "group_id": row[1],
-                "message": row[2],
-                "interval": row[3],
-                "is_active": bool(row[4]),
-                "created_at": str(row[5])
+                "group_title": row[2] or row[1],
+                "message": row[3],
+                "interval_seconds": row[4],
+                "is_active": bool(row[5]),
+                "created_at": str(row[6]),
+                "last_run": str(row[7]) if row[7] else None,
+                "next_run": str(row[8]) if row[8] else None,
+                "last_error": row[9]
             })
 
         return tasks
 
-    def get_all_active_tasks(self):
+    def get_due_tasks(self, limit=10):
         cursor = self.conn.cursor()
 
         if self.use_postgres:
             cursor.execute("""
-                SELECT id, user_id, group_id, message, interval_seconds
+                SELECT id, user_id, group_id, group_title, message, interval_seconds
                 FROM tasks
-                WHERE is_active = TRUE
-            """)
+                WHERE is_active = TRUE AND next_run <= NOW()
+                ORDER BY next_run ASC
+                LIMIT %s
+            """, (limit,))
         else:
             cursor.execute("""
-                SELECT id, user_id, group_id, message, interval_seconds
+                SELECT id, user_id, group_id, group_title, message, interval_seconds
                 FROM tasks
-                WHERE is_active = 1
-            """)
+                WHERE is_active = 1 AND next_run <= CURRENT_TIMESTAMP
+                ORDER BY next_run ASC
+                LIMIT ?
+            """, (limit,))
 
-        return cursor.fetchall()
+        tasks = []
 
-    def update_task_run(self, task_id):
+        for row in cursor.fetchall():
+            tasks.append({
+                "task_id": str(row[0]),
+                "user_id": row[1],
+                "group_id": row[2],
+                "group_title": row[3] or row[2],
+                "message": row[4],
+                "interval_seconds": int(row[5])
+            })
+
+        return tasks
+
+    def mark_task_success(self, task_id):
         cursor = self.conn.cursor()
-        ph = self.placeholder()
 
-        cursor.execute(f"""
-            UPDATE tasks
-            SET last_run = CURRENT_TIMESTAMP
-            WHERE id = {ph}
-        """, (task_id,))
+        if self.use_postgres:
+            cursor.execute("""
+                UPDATE tasks
+                SET last_run = NOW(),
+                    next_run = NOW() + (interval_seconds * INTERVAL '1 second'),
+                    last_error = NULL
+                WHERE id = %s
+            """, (task_id,))
+        else:
+            cursor.execute("""
+                UPDATE tasks
+                SET last_run = CURRENT_TIMESTAMP,
+                    next_run = datetime('now', '+' || interval_seconds || ' seconds'),
+                    last_error = NULL
+                WHERE id = ?
+            """, (task_id,))
 
         self.conn.commit()
 
-    def delete_task(self, task_id):
+    def mark_task_error(self, task_id, error):
         cursor = self.conn.cursor()
-        ph = self.placeholder()
+        error = str(error)[:500]
 
-        cursor.execute(f"""
-            UPDATE tasks
-            SET is_active = {True if self.use_postgres else 0}
-            WHERE id = {ph}
-        """, (task_id,))
+        if self.use_postgres:
+            cursor.execute("""
+                UPDATE tasks
+                SET last_run = NOW(),
+                    next_run = NOW() + (interval_seconds * INTERVAL '1 second'),
+                    last_error = %s
+                WHERE id = %s
+            """, (error, task_id))
+        else:
+            cursor.execute("""
+                UPDATE tasks
+                SET last_run = CURRENT_TIMESTAMP,
+                    next_run = datetime('now', '+' || interval_seconds || ' seconds'),
+                    last_error = ?
+                WHERE id = ?
+            """, (error, task_id))
+
+        self.conn.commit()
+
+    def delete_task(self, task_id, user_id=None):
+        cursor = self.conn.cursor()
+
+        if user_id:
+            if self.use_postgres:
+                cursor.execute("""
+                    UPDATE tasks SET is_active = FALSE
+                    WHERE id = %s AND user_id = %s
+                """, (task_id, user_id))
+            else:
+                cursor.execute("""
+                    UPDATE tasks SET is_active = 0
+                    WHERE id = ? AND user_id = ?
+                """, (task_id, user_id))
+        else:
+            if self.use_postgres:
+                cursor.execute("UPDATE tasks SET is_active = FALSE WHERE id = %s", (task_id,))
+            else:
+                cursor.execute("UPDATE tasks SET is_active = 0 WHERE id = ?", (task_id,))
 
         self.conn.commit()
 
