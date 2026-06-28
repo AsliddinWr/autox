@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Telegram Auto Poster</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="dashboard">
+        <header>
+            <div class="header-left">
+                <h1>📨 Telegram Auto Poster</h1>
+                <span class="status-badge active">🟢 Online</span>
+            </div>
+            <div class="header-right">
+                <button class="btn-icon" onclick="window.Telegram.WebApp.openTelegramLink('https://t.me/your_bot')">
+                    <span>💬 Bot</span>
+                </button>
+                <a href="/logout" class="btn-logout">🚪 Chiqish</a>
+            </div>
+        </header>
+        
+        <div class="dashboard-content">
+            <!-- Chap panel - Guruhlar -->
+            <div class="card">
+                <div class="card-header">
+                    <h2>👥 Guruhlar va kanallar</h2>
+                    <button class="btn-refresh" onclick="loadGroups()">🔄 Yangilash</button>
+                </div>
+                <div class="groups-container" id="groupsList">
+                    <div class="loading-spinner">
+                        <div class="spinner"></div>
+                        <p>Yuklanmoqda...</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- O'ng panel - Sozlash -->
+            <div class="right-panel">
+                <!-- Xabar jadvali qo'shish -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>⏰ Yangi jadval</h2>
+                    </div>
+                    <form id="scheduleForm">
+                        <div class="form-group">
+                            <label>📋 Guruhni tanlang</label>
+                            <select id="groupSelect" required>
+                                <option value="">Guruh tanlang...</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>💬 Xabar matni</label>
+                            <textarea id="message" rows="4" placeholder="Xabar matnini yozing..." required></textarea>
+                            <div class="char-count">
+                                <span id="charCount">0</span>/4096
+                            </div>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>⏱️ Vaqt oralig'i</label>
+                                <input type="number" id="interval" min="1" value="5" required>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label>📅 Vaqt birligi</label>
+                                <select id="intervalType">
+                                    <option value="seconds">Soniya</option>
+                                    <option value="minutes" selected>Daqiqa</option>
+                                    <option value="hours">Soat</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <button type="submit" class="btn-primary">
+                            <span>📌 Jadvalga qo'shish</span>
+                        </button>
+                    </form>
+                </div>
+                
+                <!-- Faol jadvallar -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>📊 Faol jadvallar</h2>
+                        <span class="task-count" id="taskCount">0 ta</span>
+                    </div>
+                    <div class="tasks-container" id="tasksList">
+                        <div class="empty-state">
+                            <p>📭 Hozircha jadvallar mavjud emas</p>
+                            <p class="small">Yuqoridagi formani to'ldirib, yangi jadval qo'shing</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Telegram Web App
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+        tg.ready();
+        
+        // Asosiy ranglarni sozlash
+        document.documentElement.style.setProperty('--tg-theme-bg-color', tg.backgroundColor);
+        document.documentElement.style.setProperty('--tg-theme-text-color', tg.textColor);
+        document.documentElement.style.setProperty('--tg-theme-button-color', tg.buttonColor);
+        
+        // Global o'zgaruvchilar
+        let groups = [];
+        
+        // Sahifa yuklanganda
+        document.addEventListener('DOMContentLoaded', () => {
+            loadGroups();
+            loadTasks();
+            setupCharCounter();
+        });
+        
+        // Belgilar sanagich
+        function setupCharCounter() {
+            const textarea = document.getElementById('message');
+            const counter = document.getElementById('charCount');
+            
+            textarea.addEventListener('input', () => {
+                const count = textarea.value.length;
+                counter.textContent = count;
+                
+                if (count > 3500) {
+                    counter.style.color = 'orange';
+                } else if (count > 4000) {
+                    counter.style.color = 'red';
+                } else {
+                    counter.style.color = '#666';
+                }
+            });
+        }
+        
+        // Guruhlarni yuklash
+        async function loadGroups() {
+            const groupsList = document.getElementById('groupsList');
+            groupsList.innerHTML = `
+                <div class="loading-spinner">
+                    <div class="spinner"></div>
+                    <p>Yuklanmoqda...</p>
+                </div>
+            `;
+            
+            try {
+                const response = await fetch('/api/groups');
+                const data = await response.json();
+                
+                if (response.ok) {
+                    groups = data.groups;
+                    displayGroups(groups);
+                    updateGroupSelect(groups);
+                } else {
+                    showError(groupsList, data.error);
+                }
+            } catch (error) {
+                showError(groupsList, error.message);
+            }
+        }
+        
+        function displayGroups(groups) {
+            const groupsList = document.getElementById('groupsList');
+            
+            if (!groups || groups.length === 0) {
+                groupsList.innerHTML = `
+                    <div class="empty-state">
+                        <p>📭 Guruhlar topilmadi</p>
+                        <p class="small">Telegramda guruh yoki kanallarga a'zo bo'ling</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            groupsList.innerHTML = groups.map((group, index) => `
+                <div class="group-item" style="animation: slideIn 0.3s ease ${index * 0.05}s both;">
+                    <div class="group-info">
+                        <div class="group-avatar">
+                            ${group.title.charAt(0).toUpperCase()}
+                        </div>
+                        <div class="group-details">
+                            <h4>${group.title}</h4>
+                            <div class="group-meta">
+                                <span class="group-type ${group.type}">
+                                    ${group.type === 'channel' ? '📢 Kanal' : '👥 Guruh'}
+                                </span>
+                                <span class="group-id">ID: ${group.id}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <button class="btn-select" onclick="quickSchedule('${group.id}', '${group.title}')">
+                        📌
+                    </button>
+                </div>
+            `).join('');
+        }
+        
+        function updateGroupSelect(groups) {
+            const select = document.getElementById('groupSelect');
+            select.innerHTML = '<option value="">Guruh tanlang...</option>' +
+                groups.map(group => `
+                    <option value="${group.id}">${group.title}</option>
+                `).join('');
+        }
+        
+        // Tez jadval qo'shish
+        function quickSchedule(groupId, groupTitle) {
+            document.getElementById('groupSelect').value = groupId;
+            document.getElementById('message').focus();
+            
+            // Scroll to form
+            document.getElementById('scheduleForm').scrollIntoView({ 
+                behavior: 'smooth' 
+            });
+            
+            tg.HapticFeedback.impactOccurred('light');
+        }
+        
+        // Tasklarni yuklash
+        async function loadTasks() {
+            try {
+                const response = await fetch('/api/tasks');
+                const data = await response.json();
+                
+                const tasksList = document.getElementById('tasksList');
+                const taskCount = document.getElementById('taskCount');
+                
+                if (data.tasks && data.tasks.length > 0) {
+                    taskCount.textContent = `${data.tasks.length} ta`;
+                    
+                    tasksList.innerHTML = data.tasks.map((task, index) => `
+                        <div class="task-item" style="animation: slideIn 0.3s ease ${index * 0.05}s both;">
+                            <div class="task-header">
+                                <div class="task-status active" title="Faol">
+                                    <span class="pulse"></span>
+                                </div>
+                                <div class="task-info">
+                                    <h4>${task.group_id}</h4>
+                                    <p class="task-message">${task.message.substring(0, 80)}${task.message.length > 80 ? '...' : ''}</p>
+                                </div>
+                            </div>
+                            <div class="task-footer">
+                                <span class="task-interval">
+                                    ⏱️ Har ${formatInterval(task.interval)} da
+                                </span>
+                                <button class="btn-delete" onclick="deleteTask('${task.task_id}')">
+                                    🗑️
+                                </button>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    taskCount.textContent = '0 ta';
+                    tasksList.innerHTML = `
+                        <div class="empty-state">
+                            <p>📭 Hozircha jadvallar mavjud emas</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Tasklarni yuklashda xatolik:', error);
+            }
+        }
+        
+        function formatInterval(seconds) {
+            if (seconds < 60) return `${seconds} soniya`;
+            if (seconds < 3600) return `${Math.floor(seconds / 60)} daqiqa`;
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            return `${hours} soat ${minutes > 0 ? minutes + ' daqiqa' : ''}`;
+        }
+        
+        // Taskni o'chirish
+        async function deleteTask(taskId) {
+            tg.showConfirm(
+                'Jadvalni o\'chirish',
+                'Haqiqatan ham bu jadvalni o\'chirmoqchimisiz?',
+                async (confirmed) => {
+                    if (confirmed) {
+                        try {
+                            const response = await fetch(`/api/tasks/${taskId}`, {
+                                method: 'DELETE'
+                            });
+                            
+                            if (response.ok) {
+                                loadTasks();
+                                tg.HapticFeedback.notificationOccurred('success');
+                                tg.showPopup({
+                                    title: '✅ Muvaffaqiyatli',
+                                    message: 'Jadval o\'chirildi',
+                                    buttons: [{type: 'ok'}]
+                                });
+                            }
+                        } catch (error) {
+                            tg.HapticFeedback.notificationOccurred('error');
+                        }
+                    }
+                }
+            );
+        }
+        
+        // Formani yuborish
+        document.getElementById('scheduleForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = {
+                group_id: document.getElementById('groupSelect').value,
+                message: document.getElementById('message').value,
+                interval: document.getElementById('interval').value,
+                interval_type: document.getElementById('intervalType').value
+            };
+            
+            try {
+                const response = await fetch('/api/schedule', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(formData)
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    tg.HapticFeedback.notificationOccurred('success');
+                    tg.showPopup({
+                        title: '✅ Muvaffaqiyatli',
+                        message: 'Xabar jadvali qo\'shildi!',
+                        buttons: [{type: 'ok'}]
+                    });
+                    
+                    loadTasks();
+                    document.getElementById('scheduleForm').reset();
+                    document.getElementById('charCount').textContent = '0';
+                } else {
+                    throw new Error(result.error);
+                }
+            } catch (error) {
+                tg.HapticFeedback.notificationOccurred('error');
+                tg.showPopup({
+                    title: '❌ Xatolik',
+                    message: error.message,
+                    buttons: [{type: 'ok'}]
+                });
+            }
+        });
+        
+        function showError(container, message) {
+            container.innerHTML = `
+                <div class="error-state">
+                    <p>❌ ${message}</p>
+                    <button class="btn-retry" onclick="loadGroups()">🔄 Qayta urinish</button>
+                </div>
+            `;
+        }
+    </script>
+</body>
+</html>

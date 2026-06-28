@@ -1,0 +1,30 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/index.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "api/bot.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/bot",
+      "dest": "api/bot.py"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "api/index.py"
+    }
+  ],
+  "env": {
+    "API_ID": "@api_id",
+    "API_HASH": "@api_hash",
+    "BOT_TOKEN": "@bot_token",
+    "SECRET_KEY": "@secret_key",
+    "DATABASE_URL": "@database_url"
+  }
+}

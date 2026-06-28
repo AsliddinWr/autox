@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram Auto Poster - Kirish</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="login-box">
+            <div class="logo">
+                <svg width="60" height="60" viewBox="0 0 48 48" fill="none">
+                    <circle cx="24" cy="24" r="24" fill="#0088cc"/>
+                    <path d="M10.5 23.5L18.5 31.5L37.5 13.5" stroke="white" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </div>
+            
+            <h2>Telegram Auto Poster</h2>
+            <p class="subtitle">Telegram akkauntingiz orqali kiring</p>
+            
+            <!-- Mamlakat kodini tanlash -->
+            <div class="country-select" id="countrySelect">
+                <div class="selected-country" onclick="toggleCountries()">
+                    <span id="selectedFlag">🇺🇿</span>
+                    <span id="selectedCode">+998</span>
+                    <span class="arrow">▼</span>
+                </div>
+                <div class="countries-list" id="countriesList" style="display: none;">
+                    <div class="country-search">
+                        <input type="text" placeholder="Mamlakat qidirish..." onkeyup="searchCountries()">
+                    </div>
+                    <div class="country-items">
+                        <div class="country-item" onclick="selectCountry('🇺🇿', '+998', 'UZ')">
+                            <span>🇺🇿</span>
+                            <span>O'zbekiston</span>
+                            <span>+998</span>
+                        </div>
+                        <div class="country-item" onclick="selectCountry('🇷🇺', '+7', 'RU')">
+                            <span>🇷🇺</span>
+                            <span>Rossiya</span>
+                            <span>+7</span>
+                        </div>
+                        <div class="country-item" onclick="selectCountry('🇰🇿', '+7', 'KZ')">
+                            <span>🇰🇿</span>
+                            <span>Qozog'iston</span>
+                            <span>+7</span>
+                        </div>
+                        <div class="country-item" onclick="selectCountry('🇺🇸', '+1', 'US')">
+                            <span>🇺🇸</span>
+                            <span>AQSH</span>
+                            <span>+1</span>
+                        </div>
+                        <div class="country-item" onclick="selectCountry('🇬🇧', '+44', 'GB')">
+                            <span>🇬🇧</span>
+                            <span>Buyuk Britaniya</span>
+                            <span>+44</span>
+                        </div>
+                        <div class="country-item" onclick="selectCountry('🇩🇪', '+49', 'DE')">
+                            <span>🇩🇪</span>
+                            <span>Germaniya</span>
+                            <span>+49</span>
+                        </div>
+                        <div class="country-item" onclick="selectCountry('🇫🇷', '+33', 'FR')">
+                            <span>🇫🇷</span>
+                            <span>Fransiya</span>
+                            <span>+33</span>
+                        </div>
+                        <div class="country-item" onclick="selectCountry('🇯🇵', '+81', 'JP')">
+                            <span>🇯🇵</span>
+                            <span>Yaponiya</span>
+                            <span>+81</span>
+                        </div>
+                        <div class="country-item" onclick="selectCountry('🇨🇳', '+86', 'CN')">
+                            <span>🇨🇳</span>
+                            <span>Xitoy</span>
+                            <span>+86</span>
+                        </div>
+                        <div class="country-item" onclick="selectCountry('🇮🇳', '+91', 'IN')">
+                            <span>🇮🇳</span>
+                            <span>Hindiston</span>
+                            <span>+91</span>
+                        </div>
+                        <div class="country-item" onclick="selectCountry('🇹🇷', '+90', 'TR')">
+                            <span>🇹🇷</span>
+                            <span>Turkiya</span>
+                            <span>+90</span>
+                        </div>
+                        <div class="country-item" onclick="selectCountry('🇦🇪', '+971', 'AE')">
+                            <span>🇦🇪</span>
+                            <span>BAA</span>
+                            <span>+971</span>
+                        </div>
+                        <div class="country-item" onclick="selectCountry('🇰🇷', '+82', 'KR')">
+                            <span>🇰🇷</span>
+                            <span>Janubiy Koreya</span>
+                            <span>+82</span>
+                        </div>
+                        <div class="country-item" onclick="selectCountry('🇸🇦', '+966', 'SA')">
+                            <span>🇸🇦</span>
+                            <span>Saudiya Arabistoni</span>
+                            <span>+966</span>
+                        </div>
+                        <div class="country-item" onclick="selectCountry('🇪🇬', '+20', 'EG')">
+                            <span>🇪🇬</span>
+                            <span>Misr</span>
+                            <span>+20</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <form id="loginForm">
+                <div class="phone-input-group">
+                    <label>Telefon raqam</label>
+                    <div class="phone-input">
+                        <span class="country-code" id="countryCodeDisplay">+998</span>
+                        <input type="tel" id="phone" placeholder="XX XXX XX XX" required autocomplete="off">
+                    </div>
+                </div>
+                
+                <button type="submit" class="btn-primary" id="submitBtn">
+                    <span class="btn-text">Kod yuborish</span>
+                    <span class="spinner" style="display: none;">
+                        <div class="dot-spinner"></div>
+                    </span>
+                </button>
+                
+                <div class="error-message" id="errorMessage" style="display: none;"></div>
+            </form>
+            
+            <div class="info-text">
+                <p>🔒 Ma'lumotlaringiz xavfsiz va shifrlangan</p>
+                <p>📱 Kod Telegram ilovangizga yuboriladi</p>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Telegram Web App
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+        tg.ready();
+        
+        let selectedCountryCode = '+998';
+        let selectedCountry = 'UZ';
+        
+        // Mamlakat tanlash
+        function toggleCountries() {
+            const list = document.getElementById('countriesList');
+            list.style.display = list.style.display === 'none' ? 'block' : 'none';
+        }
+        
+        function selectCountry(flag, code, country) {
+            document.getElementById('selectedFlag').textContent = flag;
+            document.getElementById('selectedCode').textContent = code;
+            document.getElementById('countryCodeDisplay').textContent = code;
+            selectedCountryCode = code;
+            selectedCountry = country;
+            
+            document.getElementById('countriesList').style.display = 'none';
+            
+            // Telefon inputini tozalash
+            document.getElementById('phone').value = '';
+            updatePhonePlaceholder(code);
+        }
+        
+        function updatePhonePlaceholder(code) {
+            const input = document.getElementById('phone');
+            // Formatga qarab placeholder o'zgartirish
+            input.placeholder = 'XX XXX XX XX';
+        }
+        
+        function searchCountries() {
+            // Qidiruv funksiyasi
+            const searchText = event.target.value.toLowerCase();
+            const items = document.querySelectorAll('.country-item');
+            
+            items.forEach(item => {
+                const text = item.textContent.toLowerCase();
+                item.style.display = text.includes(searchText) ? 'flex' : 'none';
+            });
+        }
+        
+        // Tashqariga bosilganda yopish
+        document.addEventListener('click', (e) => {
+            const countrySelect = document.getElementById('countrySelect');
+            const countriesList = document.getElementById('countriesList');
+            
+            if (!countrySelect.contains(e.target)) {
+                countriesList.style.display = 'none';
+            }
+        });
+        
+        // Telefon raqam formatini avtomatik to'ldirish
+        document.getElementById('phone').addEventListener('input', (e) => {
+            let value = e.target.value.replace(/\D/g, '');
+            if (value.length > 9) value = value.slice(0, 9);
+            
+            // Format: XX XXX XX XX
+            let formatted = '';
+            if (value.length > 0) formatted += value.slice(0, 2);
+            if (value.length > 2) formatted += ' ' + value.slice(2, 5);
+            if (value.length > 5) formatted += ' ' + value.slice(5, 7);
+            if (value.length > 7) formatted += ' ' + value.slice(7, 9);
+            
+            e.target.value = formatted;
+        });
+        
+        // Formani yuborish
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const phoneInput = document.getElementById('phone');
+            const submitBtn = document.getElementById('submitBtn');
+            const errorMessage = document.getElementById('errorMessage');
+            
+            let phone = phoneInput.value.replace(/\s/g, '');
+            phone = selectedCountryCode + phone;
+            
+            // Loading
+            submitBtn.disabled = true;
+            document.querySelector('.btn-text').style.display = 'none';
+            document.querySelector('.spinner').style.display = 'block';
+            errorMessage.style.display = 'none';
+            
+            try {
+                const response = await fetch('/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `phone=${encodeURIComponent(phone)}`
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    // Verify sahifasiga o'tish
+                    window.location.href = '/verify';
+                    
+                    // Telegramga signal
+                    tg.HapticFeedback.notificationOccurred('success');
+                } else {
+                    throw new Error(data.error || 'Xatolik yuz berdi');
+                }
+            } catch (error) {
+                errorMessage.textContent = error.message;
+                errorMessage.style.display = 'block';
+                
+                tg.HapticFeedback.notificationOccurred('error');
+            } finally {
+                submitBtn.disabled = false;
+                document.querySelector('.btn-text').style.display = 'block';
+                document.querySelector('.spinner').style.display = 'none';
+            }
+        });
+    </script>
+</body>
+</html>
